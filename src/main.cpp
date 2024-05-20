@@ -4,6 +4,8 @@
 #include <HTTPClient.h>
 #include <LovyanGFX.h>
 #include <LGFX_AUTODETECT.hpp>
+#include <deque>
+#include <functional>
 
 static LGFX lcd;
 static LGFX_Sprite sprite(&lcd);
@@ -41,9 +43,77 @@ struct Point3D
   float x;
   float y;
   float z;
+
+  Point3D operator-=(const Point3D &rhs)
+  {
+    x -= rhs.x;
+    y -= rhs.y;
+    z -= rhs.z;
+    return *this;
+  }
+
+  Point3D operator-(const Point3D &rhs) const
+  {
+    return Point3D{x - rhs.x, y - rhs.y, z - rhs.z};
+  }
 };
 
-Point3D accZero;
+template <typename T>
+struct LogEntry
+{
+  T data;
+  time_t timestamp;
+};
+
+class AccelerationLog
+{
+public:
+  AccelerationLog(std::function<void(float *, float *, float *)> getAccelDataFunc, int max_log_size = 16)
+      : getAccelData(getAccelDataFunc), accZero{0, 0, 0}, max_log_size(max_log_size)
+  {
+  }
+
+  void init()
+  {
+    reset();
+  }
+
+  void reset()
+  {
+    getAccelData(&accZero.x, &accZero.y, &accZero.z);
+    accLog.clear();
+  }
+
+  void update(time_t timestamp = time(NULL))
+  {
+    Point3D acc;
+    getAccelData(&acc.x, &acc.y, &acc.z);
+    accLog.push_back({acc - accZero, timestamp});
+    if (accLog.size() > max_log_size)
+    {
+      accLog.pop_front();
+    }
+  }
+
+  std::deque<LogEntry<Point3D>>::const_reverse_iterator begin() const
+  {
+    return accLog.rbegin();
+  }
+
+  std::deque<LogEntry<Point3D>>::const_reverse_iterator end() const
+  {
+    return accLog.rend();
+  }
+
+private:
+  const int max_log_size;
+  std::function<void(float *, float *, float *)> getAccelData;
+  Point3D accZero;
+  std::deque<LogEntry<Point3D>> accLog;
+};
+
+static AccelerationLog accelLog([](float *x, float *y, float *z)
+                                { M5.Imu.getAccelData(x, y, z); });
 
 void drawInformation()
 {
@@ -52,25 +122,28 @@ void drawInformation()
   sprite.setTextSize(1);
   sprite.setFont(&AsciiFont8x16);
   sprite.setCursor(0, 0);
-  sprite.println("Information");
-  sprite.println("----------------");
-  sprite.println("Acceleration");
-  sprite.println("----------------");
+  sprite.println(" Acceleration");
+  sprite.println(" ----------------");
 
-  Point3D acc;
-  M5.Imu.getAccelData(&acc.x, &acc.y, &acc.z);
-  sprite.print("X: ");
-  sprite.println(acc.x - accZero.x);
-  sprite.print("Y: ");
-  sprite.println(acc.y - accZero.y);
-  sprite.print("Z: ");
-  sprite.println(acc.z - accZero.z);
-  sprite.pushSprite(&lcd, 0, 0);
+  for (auto it = accelLog.begin(); it != accelLog.end(); ++it)
+  {
+    const auto &logEntry = *it;
+    sprite.print(" X:");
+    sprite.print(logEntry.data.x);
+    sprite.print(", Y:");
+    sprite.print(logEntry.data.y);
+    sprite.print(", Z:");
+    sprite.print(logEntry.data.z);
+    sprite.print(", T:");
+    sprite.println(logEntry.timestamp);
+  }
+
+  sprite.pushSprite(0, 0);
 }
 
 void resetAcceleration()
 {
-  M5.Imu.getAccelData(&accZero.x, &accZero.y, &accZero.z);
+  accelLog.reset();
 }
 
 void setupSprite()
@@ -103,6 +176,8 @@ void setup()
   lcd.setCursor(0, 0);
   debug_println("IMU & Display Ready");
 
+  accelLog.init();
+
   setupSprite(); // Initialize and display the sprite
 }
 
@@ -115,6 +190,6 @@ void loop()
     resetAcceleration();
   }
   drawInformation();
-  // drawCircles();
+  // drawGraph();
   delay(250);
 }
